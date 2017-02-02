@@ -1,0 +1,73 @@
+#!/bin/bash
+
+DROPS7=build/drops-7
+D7_COMPOSER=build/drops-7-composer
+
+#
+# Make our target repository $D7_COMPOSER if it does not already exist
+#
+if [ ! -d $D7_COMPOSER ]
+then
+  mkdir -p $D7_COMPOSER
+  (
+    cd $D7_COMPOSER
+    git init
+  )
+fi
+
+#
+# Make a clean local clone of $DROPS7 if it is not already there
+#
+if [ ! -d $DROPS7 ]
+then
+  git clone git@github.com:pantheon-systems/drops-7.git $DROPS7
+else
+  git -C $DROPS7 checkout master
+  git -C $DROPS7 pull
+fi
+
+#
+# Get a list of all of the tags available in $DROPS7, sorted.
+#
+tags=$(git -C $DROPS7 tag -l | grep '^7\.[0-9]*$' | sed -e 's/7\.//' | sort -n | sed -e 's/^/7./')
+
+echo "Tags: $tags"
+
+#
+# Iterate over all of the tags
+#
+for tag in $tags ; do
+  echo "------------- $tag -------------"
+  #
+  # Check the commit hash for the tag in $DROPS7 and $D7_COMPOSER
+  #
+  ref=$(git -C $DROPS7 rev-parse refs/tags/$tag 2>/dev/null)
+  targetref=$(git -C $D7_COMPOSER rev-parse refs/tags/$tag 2>/dev/null)
+  if [ "$?" == "0" ]
+  then
+    echo "drops-7-composer $tag exits at $targetref"
+  else
+    echo "create $tag from drops-7 $ref"
+    #
+    # If the tag does not exist in the target yet, then create it.
+    #
+    comment="$(git -C $DROPS7 log -1 $tag --pretty=format:"%s")"
+    commitdate="$(git -C $DROPS7 log -1 --date=iso $tag --pretty=format:"%cd")"
+    echo "Date: $commitdate"
+    echo "Comment: $comment"
+    git -C $DROPS7 checkout $tag >/dev/null 2>&1
+
+    rsync -ravz --exclude=.git --delete $DROPS7/ $D7_COMPOSER >/dev/null 2>&1
+    cp drupal.composer.json $D7_COMPOSER/composer.json
+
+    git -C $D7_COMPOSER add -A --force . >/dev/null 2>&1
+    git -C $D7_COMPOSER commit -m "$comment" --author="Pantheon Automation <bot@getpantheon.com>" --date="$commitdate" >/dev/null 2>&1
+    git -C $D7_COMPOSER tag "$tag" >/dev/null 2>&1
+
+    drush -r $D7_COMPOSER status 'Drupal version'
+
+    git -C $DROPS7 checkout master >/dev/null 2>&1
+  fi
+done
+
+echo "Done"
